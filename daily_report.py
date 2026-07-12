@@ -138,57 +138,50 @@ def load_constituents():
     return items[:lim] if lim > 0 else items
 
 
-def _hist_monthly_ak(code, attempts=5):
-    """akshare 月线(前复权)带重试 + 递增退避。"""
+def _sina_monthly(code, attempts=4):
+    """新浪日线→合成月线(H/L/C/V)。新浪不限流、不拒海外 IP，GitHub 可用。"""
     import akshare as ak
+    sym = ("sh" if code[0] == "6" else "sz") + code
     for i in range(attempts):
         try:
-            df = ak.stock_zh_a_hist(symbol=code, period="monthly",
-                                    start_date="20120101", adjust="qfq")
+            df = ak.stock_zh_a_daily(symbol=sym, start_date="20120101", adjust="qfq")
             if df is not None and not df.empty:
-                return df
+                ym = df["date"].astype(str).str[:7]
+                g = df.groupby(ym)
+                return ([float(x) for x in g["high"].max()],
+                        [float(x) for x in g["low"].min()],
+                        [float(x) for x in g["close"].last()],
+                        [float(x) for x in g["volume"].sum()])
         except Exception:
             pass
-        time.sleep(0.5 * (i + 1))
+        time.sleep(0.4 * (i + 1))
     return None
 
 
 def fetch_monthly(uni):
-    """akshare 顺序抓月线（控速，避免并发触发 eastmoney 风控）。WORKERS env 可调并发(默认1=顺序)。"""
+    """新浪日线合成月线，可并发(新浪扛得住)。WORKERS env 默认 6。"""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    workers = int(os.environ.get("WORKERS") or "1")
+    workers = int(os.environ.get("WORKERS") or "6")
 
     def one(code, name):
-        df = _hist_monthly_ak(code)
-        if df is None or len(df) < CFG["min_months"]:
+        r = _sina_monthly(code)
+        if r is None or len(r[2]) < CFG["min_months"]:
             return None
-        return (code, name,
-                [float(x) for x in df["最高"]], [float(x) for x in df["最低"]],
-                [float(x) for x in df["收盘"]], [float(x) for x in df["成交量"]])
+        return (code, name, r[0], r[1], r[2], r[3])
 
     data, done = {}, 0
-    if workers <= 1:
-        for code, name in uni:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = [pool.submit(one, c, nm) for c, nm in uni]
+        for f in as_completed(futs):
             done += 1
-            r = one(code, name)
-            if r:
-                data[r[0]] = (r[1], r[2], r[3], r[4], r[5])
-            if done % 50 == 0:
+            if done % 100 == 0:
                 print(f"  月线 {done}/{len(uni)} · 已取 {len(data)}", file=sys.stderr)
-            time.sleep(0.15)   # 控速，别触发风控
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(one, c, nm) for c, nm in uni]
-            for f in as_completed(futs):
-                done += 1
-                if done % 100 == 0:
-                    print(f"  月线 {done}/{len(uni)} · 已取 {len(data)}", file=sys.stderr)
-                try:
-                    r = f.result()
-                    if r:
-                        data[r[0]] = (r[1], r[2], r[3], r[4], r[5])
-                except Exception:
-                    pass
+            try:
+                r = f.result()
+                if r:
+                    data[r[0]] = (r[1], r[2], r[3], r[4], r[5])
+            except Exception:
+                pass
     return data
 
 

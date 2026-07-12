@@ -116,9 +116,12 @@ def _pref(code):
 
 
 def load_constituents():
+    """扫描哪些指数成分。env INDEXES 逗号分隔，默认 000905(中证500)。
+    想扫中证500+1000 就设 INDEXES=000905,000852。"""
     import akshare as ak
+    idxs = [x.strip() for x in os.environ.get("INDEXES", "000905").split(",") if x.strip()]
     codes = {}
-    for idx in ("000905", "000852"):
+    for idx in idxs:
         for _ in range(3):
             try:
                 df = ak.index_stock_cons(symbol=idx)
@@ -129,7 +132,10 @@ def load_constituents():
                 break
             except Exception:
                 time.sleep(1.0)
-    return list(codes.items())
+    # LIMIT 可再截断（快速试跑）
+    lim = int(os.environ.get("LIMIT", "0"))
+    items = list(codes.items())
+    return items[:lim] if lim > 0 else items
 
 
 def fetch_monthly(uni):

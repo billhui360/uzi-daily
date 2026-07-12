@@ -138,43 +138,57 @@ def load_constituents():
     return items[:lim] if lim > 0 else items
 
 
+def _hist_monthly_ak(code, attempts=5):
+    """akshare 月线(前复权)带重试 + 递增退避。"""
+    import akshare as ak
+    for i in range(attempts):
+        try:
+            df = ak.stock_zh_a_hist(symbol=code, period="monthly",
+                                    start_date="20120101", adjust="qfq")
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            pass
+        time.sleep(0.5 * (i + 1))
+    return None
+
+
 def fetch_monthly(uni):
-    """baostock 顺序抓月线，断连自动重登重试（baostock 不像 eastmoney 那样限流批量）。"""
-    import baostock as bs
-    bs.login()
-    start = str(date.today() - timedelta(days=365 * 11))
-    data = {}
-    for i, (code, name) in enumerate(uni):
-        pref = "sh." if code[0] == "6" else "sz."
-        for attempt in range(3):
-            try:
-                rs = bs.query_history_k_data_plus(
-                    pref + code, "high,low,close,volume",
-                    start_date=start, frequency="m", adjustflag="2")
-                if rs.error_code != "0":
-                    raise RuntimeError(rs.error_msg)
-                H, L, C, V = [], [], [], []
-                while rs.next():
-                    h, l, c, v = rs.get_row_data()
-                    try:
-                        H.append(float(h)); L.append(float(l)); C.append(float(c))
-                        V.append(float(v) if v else 0.0)
-                    except ValueError:
-                        pass
-                if len(C) >= CFG["min_months"]:
-                    data[code] = (name, H, L, C, V)
-                break
-            except Exception:
-                # 断连：登出重登再试
+    """akshare 顺序抓月线（控速，避免并发触发 eastmoney 风控）。WORKERS env 可调并发(默认1=顺序)。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    workers = int(os.environ.get("WORKERS") or "1")
+
+    def one(code, name):
+        df = _hist_monthly_ak(code)
+        if df is None or len(df) < CFG["min_months"]:
+            return None
+        return (code, name,
+                [float(x) for x in df["最高"]], [float(x) for x in df["最低"]],
+                [float(x) for x in df["收盘"]], [float(x) for x in df["成交量"]])
+
+    data, done = {}, 0
+    if workers <= 1:
+        for code, name in uni:
+            done += 1
+            r = one(code, name)
+            if r:
+                data[r[0]] = (r[1], r[2], r[3], r[4], r[5])
+            if done % 50 == 0:
+                print(f"  月线 {done}/{len(uni)} · 已取 {len(data)}", file=sys.stderr)
+            time.sleep(0.15)   # 控速，别触发风控
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(one, c, nm) for c, nm in uni]
+            for f in as_completed(futs):
+                done += 1
+                if done % 100 == 0:
+                    print(f"  月线 {done}/{len(uni)} · 已取 {len(data)}", file=sys.stderr)
                 try:
-                    bs.logout()
+                    r = f.result()
+                    if r:
+                        data[r[0]] = (r[1], r[2], r[3], r[4], r[5])
                 except Exception:
                     pass
-                time.sleep(0.6 * (attempt + 1))
-                bs.login()
-        if (i + 1) % 200 == 0:
-            print(f"  月线 {i+1}/{len(uni)} · 已取 {len(data)}", file=sys.stderr)
-    bs.logout()
     return data
 
 

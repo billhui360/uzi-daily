@@ -232,24 +232,34 @@ def run_screen(data):
 
 
 def load_watchlist():
+    """返回 [(code, name)]，name 取自 watchlist.txt 的注释。"""
     fp = Path(__file__).parent / "watchlist.txt"
-    codes = []
+    seen = {}
     if fp.exists():
         for line in fp.read_text(encoding="utf-8").splitlines():
-            line = line.strip().split("#")[0].strip()
-            if line[:6].isdigit():
-                codes.append(line[:6])
-    return list(dict.fromkeys(codes))
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            code = raw.split("#")[0].strip()[:6]
+            name = raw.split("#", 1)[1].strip() if "#" in raw else code
+            if code.isdigit():
+                seen.setdefault(code, name)
+    return list(seen.items())
 
 
-def watch_status(codes, data):
+def watch_status(items, data):
     rows = []
-    for code in codes:
+    for code, wname in items:
         d = data.get(code)
-        if not d:
-            rows.append((code, code, "—", "不在中证500/1000 或数据缺"))
-            continue
-        name, H, L, C, V = d
+        if d:
+            name, H, L, C, V = d
+        else:
+            # 自选股不在扫描池 → 单独抓新浪日线合成月线
+            raw = _sina_monthly(code)
+            if raw is None or len(raw[2]) < CFG["min_months"]:
+                rows.append((code, wname, "—", "数据抓取失败/上市不足"))
+                continue
+            name, (H, L, C, V) = wname, raw
         r = evaluate_series(code, name, H, L, C, V, CFG)
         if r:
             tag = " · 筹码集中✓" if chip_concentrating(code) else ""
@@ -279,7 +289,7 @@ def build_html(hits, watch, regime, top_n):
     for code, name, st, note in watch:
         color = "#0a0" if st not in ("未入选", "—") else "#999"
         P.append(f"<tr><td style='border-bottom:1px solid #eee'>{esc(code)}</td><td style='border-bottom:1px solid #eee'>{esc(name)}</td><td style='border-bottom:1px solid #eee;color:{color}'>{esc(st)}</td><td style='border-bottom:1px solid #eee'>{esc(note)}</td></tr>")
-    P.append("</table><p style='color:#aaa;font-size:11px;margin-top:20px'>UZI 云端每日 · baostock+akshare · ③逼近前高优先 · 筹码集中加分。回测显示选股 alpha 薄，真实价值在大盘择时与筹码信号，仅供研究、非投资建议。</p>")
+    P.append("</table><p style='color:#aaa;font-size:11px;margin-top:20px'>UZI 云端每日 · 新浪日线+akshare · ③逼近前高优先 · 筹码集中加分。回测显示选股 alpha 薄，真实价值在大盘择时与筹码信号，仅供研究、非投资建议。</p>")
     return "<div style='font-family:sans-serif;max-width:860px'>" + "".join(P) + "</div>"
 
 

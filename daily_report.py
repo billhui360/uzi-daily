@@ -259,20 +259,48 @@ def build_html(hits, watch, regime, top_n):
     return "<div style='font-family:sans-serif;max-width:860px'>" + "".join(P) + "</div>"
 
 
+# 邮箱后缀 → (SMTP服务器, 端口, 是否SSL)。与 daily_stock_analysis 一致，从发件邮箱自动推。
+DOMAIN_SMTP = {
+    "qq.com": ("smtp.qq.com", 465, True), "foxmail.com": ("smtp.qq.com", 465, True),
+    "163.com": ("smtp.163.com", 465, True), "126.com": ("smtp.126.com", 465, True),
+    "139.com": ("smtp.139.com", 465, True), "sina.com": ("smtp.sina.com", 465, True),
+    "sohu.com": ("smtp.sohu.com", 465, True), "aliyun.com": ("smtp.aliyun.com", 465, True),
+    "gmail.com": ("smtp.gmail.com", 587, False), "outlook.com": ("smtp-mail.outlook.com", 587, False),
+    "hotmail.com": ("smtp-mail.outlook.com", 587, False), "live.com": ("smtp-mail.outlook.com", 587, False),
+}
+
+
 def send_email(subject, html):
-    host, user, pw = os.environ.get("SMTP_HOST"), os.environ.get("SMTP_USER"), os.environ.get("SMTP_PASS")
-    to = [x.strip() for x in os.environ.get("MAIL_TO", "").split(",") if x.strip()]
-    if not (host and user and pw and to):
-        print("⚠️ SMTP 环境变量不全，跳过发信", file=sys.stderr)
+    import re
+    from email.utils import formataddr
+    # 兼容两套命名：EMAIL_*(daily_stock_analysis) 优先，SMTP_*/MAIL_* 兜底
+    user = os.environ.get("EMAIL_SENDER") or os.environ.get("SMTP_USER")
+    pw = os.environ.get("EMAIL_PASSWORD") or os.environ.get("SMTP_PASS")
+    to_raw = os.environ.get("EMAIL_RECEIVERS") or os.environ.get("MAIL_TO") or ""
+    to = [x.strip() for x in re.split(r"[,;\s]+", to_raw) if x.strip()]
+    if not (user and pw and to):
+        print("⚠️ 邮件环境变量不全(需 EMAIL_SENDER/EMAIL_PASSWORD/EMAIL_RECEIVERS)，跳过发信", file=sys.stderr)
         return
+    domain = user.split("@")[-1].lower()
+    host, port, use_ssl = DOMAIN_SMTP.get(domain, ("smtp." + domain, 465, True))
+    host = os.environ.get("SMTP_HOST") or host                       # 允许显式覆盖
+    port = int(os.environ.get("SMTP_PORT") or port)
+    name = os.environ.get("EMAIL_SENDER_NAME", "UZI 每日选股")
     msg = MIMEText(html, "html", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = os.environ.get("MAIL_FROM", user)
+    msg["From"] = formataddr((str(Header(name, "utf-8")), user))
     msg["To"] = ", ".join(to)
-    with smtplib.SMTP_SSL(host, int(os.environ.get("SMTP_PORT", "465")), context=ssl.create_default_context()) as s:
-        s.login(user, pw)
-        s.sendmail(os.environ.get("MAIL_FROM", user), to, msg.as_string())
-    print(f"✅ 邮件已发送 → {', '.join(to)}", file=sys.stderr)
+    ctx = ssl.create_default_context()
+    if use_ssl:
+        with smtplib.SMTP_SSL(host, port, context=ctx) as s:
+            s.login(user, pw)
+            s.sendmail(user, to, msg.as_string())
+    else:
+        with smtplib.SMTP(host, port) as s:
+            s.starttls(context=ctx)
+            s.login(user, pw)
+            s.sendmail(user, to, msg.as_string())
+    print(f"✅ 邮件已发送 → {', '.join(to)}（{host}:{port}）", file=sys.stderr)
 
 
 def main():

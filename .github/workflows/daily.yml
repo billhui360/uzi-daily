@@ -25,11 +25,10 @@ jobs:
           pip install -r requirements.txt
       - name: 跑每日选股并发邮件
         env:
-          SMTP_HOST: ${{ secrets.SMTP_HOST }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASS: ${{ secrets.SMTP_PASS }}
-          MAIL_TO:   ${{ secrets.MAIL_TO }}
-          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          # 你已配的这套(与 daily_stock_analysis 同名) —— SMTP 服务器从邮箱后缀自动推
+          EMAIL_SENDER:      ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD:    ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVERS:   ${{ secrets.EMAIL_RECEIVERS }}
+          EMAIL_SENDER_NAME: ${{ secrets.EMAIL_SENDER_NAME }}
           TOP_N: '30'
         run: python daily_report.py

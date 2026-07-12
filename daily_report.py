@@ -8,7 +8,7 @@
   增强：① 筹码集中（股东户数较 2 季前下降 = 主力吸筹，加分）
         ② 大盘择时（沪深300 跌破 MA10 = 熊市，邮件顶部红色警示）
         ③ ③逼近前高优先排序（回测里该阶段最强）
-  （自选股体检已由单独的每日推送负责，本报告不含）
+  另出：自选股每日体检（watchlist.txt）
 
 需要的 GitHub Secrets：
   SMTP_HOST（如 smtp.qq.com）· SMTP_PORT（默认 465）· SMTP_USER · SMTP_PASS（授权码）
@@ -231,7 +231,46 @@ def run_screen(data):
     return hits
 
 
-def build_html(hits, regime, top_n):
+def load_watchlist():
+    """返回 [(code, name)]，name 取自 watchlist.txt 的注释。"""
+    fp = Path(__file__).parent / "watchlist.txt"
+    seen = {}
+    if fp.exists():
+        for line in fp.read_text(encoding="utf-8").splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#"):
+                continue
+            code = raw.split("#")[0].strip()[:6]
+            name = raw.split("#", 1)[1].strip() if "#" in raw else code
+            if code.isdigit():
+                seen.setdefault(code, name)
+    return list(seen.items())
+
+
+def watch_status(items, data):
+    rows = []
+    for code, wname in items:
+        d = data.get(code)
+        if d:
+            name, H, L, C, V = d
+        else:
+            # 自选股不在扫描池 → 单独抓新浪日线合成月线
+            raw = _sina_monthly(code)
+            if raw is None or len(raw[2]) < CFG["min_months"]:
+                rows.append((code, wname, "—", "数据抓取失败/上市不足"))
+                continue
+            name, (H, L, C, V) = wname, raw
+        r = evaluate_series(code, name, H, L, C, V, CFG)
+        if r:
+            tag = " · 筹码集中✓" if chip_concentrating(code) else ""
+            rows.append((code, name, r["阶段"], f"得分{r['score']} · 距高{r['距高点%']:.0f}%{tag}"))
+        else:
+            last, ma12 = C[-1], sum(C[-12:]) / min(12, len(C))
+            rows.append((code, name, "未入选", "跌破年线/趋势未起" if last <= ma12 else "多头但未满足大底/抬高"))
+    return rows
+
+
+def build_html(hits, watch, regime, top_n):
     esc = lambda s: str(s).replace("&", "&amp;").replace("<", "&lt;")
     P = []
     if regime is not None:
@@ -246,7 +285,11 @@ def build_html(hits, regime, top_n):
         cells = [r["code"], r["name"], r["price"], r["阶段"], chip, f"+{r['距高点%']:.0f}%", f"{r['抬底%']:.0f}%", r["量能比"], round(r["score_adj"], 1)]
         P.append("<tr>" + "".join(f"<td style='border-bottom:1px solid #eee'>{esc(x)}</td>" for x in cells) + "</tr>")
     P.append("</table>")
-    P.append("<p style='color:#aaa;font-size:11px;margin-top:20px'>UZI 云端每日 · 新浪日线+akshare · ③逼近前高优先 · 筹码集中加分。回测显示选股 alpha 薄，真实价值在大盘择时与筹码信号，仅供研究、非投资建议。</p>")
+    P.append("<h2 style='margin-top:24px'>🔍 自选股每日体检</h2><table cellpadding=6 style='border-collapse:collapse;font-size:13px'><tr style='background:#f0f0f0'><th>代码</th><th>名称</th><th>状态</th><th>说明</th></tr>")
+    for code, name, st, note in watch:
+        color = "#0a0" if st not in ("未入选", "—") else "#999"
+        P.append(f"<tr><td style='border-bottom:1px solid #eee'>{esc(code)}</td><td style='border-bottom:1px solid #eee'>{esc(name)}</td><td style='border-bottom:1px solid #eee;color:{color}'>{esc(st)}</td><td style='border-bottom:1px solid #eee'>{esc(note)}</td></tr>")
+    P.append("</table><p style='color:#aaa;font-size:11px;margin-top:20px'>UZI 云端每日 · 新浪日线+akshare · ③逼近前高优先 · 筹码集中加分。回测显示选股 alpha 薄，真实价值在大盘择时与筹码信号，仅供研究、非投资建议。</p>")
     return "<div style='font-family:sans-serif;max-width:860px'>" + "".join(P) + "</div>"
 
 
@@ -306,7 +349,8 @@ def main():
     regime = market_regime()
     print("[4/4] 筛选 + 筹码集中...", file=sys.stderr)
     hits = run_screen(data)
-    html = build_html(hits, regime, top_n)
+    watch = watch_status(load_watchlist(), data)
+    html = build_html(hits, watch, regime, top_n)
     reg = "趋势市🟢" if (regime and regime["bull"]) else ("转弱🔴" if regime else "?")
     subject = f"UZI 每日选股 · {date.today()} · 命中{len(hits)} · 大盘{reg}"
     if os.environ.get("DRY_RUN") == "1":

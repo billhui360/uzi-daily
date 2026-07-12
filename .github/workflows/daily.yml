@@ -31,4 +31,6 @@ jobs:
           EMAIL_RECEIVERS:   ${{ secrets.EMAIL_RECEIVERS }}
           EMAIL_SENDER_NAME: ${{ secrets.EMAIL_SENDER_NAME }}
           TOP_N: '30'
+          INDEXES: ${{ vars.INDEXES }}   # 留空=中证500；填 000905,000852 = 500+1000
+          LIMIT:   ${{ vars.LIMIT }}      # 留空=全扫；填 100 = 只扫100只快速试
         run: python daily_report.py
